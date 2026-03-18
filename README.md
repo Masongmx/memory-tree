@@ -14,6 +14,15 @@ The result? Your agent becomes slower, more expensive, and more forgetful — be
 
 Memory Tree fixes this with a simple insight: **forgetfulness is a feature, not a bug.**
 
+## Highlights
+
+- 🌍 **Works everywhere** — local machine, cloud VM, WSL, Docker. No GPU required.
+- 🔍 **Multi-backend search** — Ollama (free), Zhipu/OpenAI API, or keyword fallback. Auto-detected.
+- 💰 **Zero token consumption** — all operations are local Python scripts, no LLM API calls
+- 🔒 **Privacy-first** — with Ollama backend, your memory data never leaves your machine
+- 📦 **One-command setup** — `setup` auto-detects environment, indexes memory, creates cron jobs
+- 🔄 **Hands-free after install** — automatic decay and archival run on schedule
+
 ## How It Works
 
 Every knowledge block in `MEMORY.md` gets a **confidence score** (0.0–1.0):
@@ -45,8 +54,11 @@ Uses local [Ollama](https://ollama.ai) embeddings (`qwen3-embedding`) for semant
 ## Requirements
 
 - [Python 3.8+](https://python.org) (no pip packages needed)
-- [Ollama](https://ollama.ai) running locally
-- `ollama pull qwen3-embedding`
+- At least one search backend:
+  - **Ollama** (free, recommended): `ollama serve` + `ollama pull qwen3-embedding`
+  - **Zhipu API**: set `ZHIPU_API_KEY` env var or configure via `config`
+  - **OpenAI API**: set `OPENAI_API_KEY` env var or configure via `config`
+  - **Keyword** (built-in fallback): works with zero dependencies
 
 ## Install as OpenClaw Skill
 
