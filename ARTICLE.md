@@ -166,4 +166,4 @@ Memory Tree 的思路是反过来的：**不要搭空壳，先让现有的东西
 *🌳 Memory Tree — OpenClaw 记忆生命周期管理技能*
 *零云端依赖 · 零 token 消耗 · 零人工维护*
 
-*GitHub: [memory-tree](链接待填) | OpenClaw ClawHub: memory-tree*
+*GitHub: [Masongmx/memory-tree](https://github.com/Masongmx/memory-tree) | 安装: [v0.1.0 Release](https://github.com/Masongmx/memory-tree/releases/tag/v0.1.0)*
