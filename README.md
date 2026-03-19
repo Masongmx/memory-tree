@@ -1,136 +1,136 @@
-# 🌳 Memory Tree
+# 🌳 Memory Tree — 记忆树
 
-> Confidence-based memory lifecycle management for [OpenClaw](https://github.com/openclaw/openclaw) agents.
+> 基于[OpenClaw](https://github.com/openclaw/openclaw) 代理的置信度记忆生命周期管理。
 
-Memory Tree gives your AI agent the ability to **forget** — the most human feature of memory. Knowledge that's frequently used stays fresh and green. Knowledge that's neglected slowly fades away. When it's truly stale, its essence is archived and it's removed from active memory.
+Memory Tree 赋予你的 AI 代理**遗忘**的能力——这是记忆中最具人性化的特征。频繁使用的知识保持新鲜翠绿。被忽视的知识逐渐褪色消散。当知识真正陈旧时，其精华会被归档，并从活跃记忆中移除。
 
-**Zero cloud API calls. Zero token consumption. Zero manual maintenance.**
+**零云端 API 调用。零 Token 消耗。零手动维护。**
 
-## Why?
+## 为什么需要？
 
-OpenClaw agents store long-term memory in `MEMORY.md`. Over time, this file grows — new rules, old decisions, skill lists, API keys, todo items... everything piles up. Important knowledge gets buried under noise.
+OpenClaw 代理将长期记忆存储在 `MEMORY.md` 中。随着时间推移，这个文件不断增长——新规则、旧决策、技能列表、API 密钥、待办事项……所有内容堆积在一起。重要的知识被淹没在噪音之下。
 
-The result? Your agent becomes slower, more expensive, and more forgetful — because it's loading thousands of tokens of irrelevant context every session.
+结果如何？你的代理变得越来越慢、越来越昂贵、越来越健忘——因为它每次会话都要加载数千个无关的 Token 上下文。
 
-Memory Tree fixes this with a simple insight: **forgetfulness is a feature, not a bug.**
+Memory Tree 用一个简单的洞见解决了这个问题：**遗忘是特性，不是缺陷。**
 
-## Highlights
+## 亮点
 
-- 🌍 **Works everywhere** — local machine, cloud VM, WSL, Docker. No GPU required.
-- 🔍 **Multi-backend search** — Ollama (free), Zhipu/OpenAI API, or keyword fallback. Auto-detected.
-- 💰 **Zero token consumption** — all operations are local Python scripts, no LLM API calls
-- 🔒 **Privacy-first** — with Ollama backend, your memory data never leaves your machine
-- 📦 **One-command setup** — `setup` auto-detects environment, indexes memory, creates cron jobs
-- 🔄 **Hands-free after install** — automatic decay and archival run on schedule
+- 🌍 **随处运行** — 本地机器、云虚拟机、WSL、Docker。无需 GPU。
+- 🔍 **多后端搜索** — Ollama（免费）、智谱/OpenAI API 或关键词回退。自动检测。
+- 💰 **零 Token 消耗** — 所有操作均为本地 Python 脚本，无需调用 LLM API
+- 🔒 **隐私优先** — 使用 Ollama 后端时，你的记忆数据永远不会离开你的机器
+- 📦 **一键安装** — `setup` 自动检测环境、索引记忆、创建定时任务
+- 🔄 **安装后免维护** — 自动衰减和归档按计划运行
 
-## How It Works
+## 工作原理
 
-Every knowledge block in `MEMORY.md` gets a **confidence score** (0.0–1.0):
+`MEMORY.md` 中的每个知识块都会获得一个**置信度分数**（0.0–1.0）：
 
-| Stage | Score | Meaning |
+| 阶段 | 分数 | 含义 |
 |-------|-------|---------|
-| 🌱 Sprout | 0.7 | New knowledge |
-| 🌿 Green | ≥0.8 | Frequently used, thriving |
-| 🍂 Yellow | 0.5–0.8 | Infrequently used, decaying |
-| 🍁 Dead | 0.3–0.5 | Rarely used, near archival |
-| 🪨 Soil | <0.3 | Archived, essence preserved |
+| 🌱 新芽 | 0.7 | 新知识 |
+| 🌿 翠绿 | ≥0.8 | 频繁使用，茁壮成长 |
+| 🍂 枯黄 | 0.5–0.8 | 使用较少，正在衰减 |
+| 🍁 凋零 | 0.3–0.5 | 极少使用，接近归档 |
+| 🪨 落土 | <0.3 | 已归档，精华保留 |
 
-### Confidence Changes
+### 置信度变化规则
 
-| Event | Change |
+| 事件 | 变化 |
 |-------|--------|
-| New knowledge created | Set to 0.7 |
-| Found by search | +0.03 |
-| Actively used | +0.08 |
-| Manual confirmation | Set to 0.95 |
-| Each day unaccessed (P2) | -0.008 |
-| Each day unaccessed (P1) | -0.004 |
-| P0 (core principles) | Never decays |
+| 新知识创建 | 设为 0.7 |
+| 被搜索命中 | +0.03 |
+| 被主动使用 | +0.08 |
+| 手动确认 | 设为 0.95 |
+| 每天未被访问（P2） | -0.008 |
+| 每天未被访问（P1） | -0.004 |
+| P0（核心原则） | 永不衰减 |
 
-### Semantic Search
+### 语义搜索
 
-Uses local [Ollama](https://ollama.ai) embeddings (`qwen3-embedding`) for semantic search — understands meaning, not just keywords. Searches that return results automatically boost those knowledge blocks' confidence. Frequently recalled knowledge stays alive.
+使用本地 [Ollama](https://ollama.ai) 嵌入模型（`qwen3-embedding`）进行语义搜索——理解语义，而不仅仅是关键词。命中搜索结果的知识块会自动提升置信度。频繁被召回的知识保持活跃。
 
-## Requirements
+## 环境要求
 
-- [Python 3.8+](https://python.org) (no pip packages needed)
-- At least one search backend:
-  - **Ollama** (free, recommended): `ollama serve` + `ollama pull qwen3-embedding`
-  - **Zhipu API**: set `ZHIPU_API_KEY` env var or configure via `config`
-  - **OpenAI API**: set `OPENAI_API_KEY` env var or configure via `config`
-  - **Keyword** (built-in fallback): works with zero dependencies
+- [Python 3.8+](https://python.org)（无需安装 pip 包）
+- 至少一个搜索后端：
+  - **Ollama**（免费，推荐）：`ollama serve` + `ollama pull qwen3-embedding`
+  - **智谱 API**：设置 `ZHIPU_API_KEY` 环境变量或通过 `config` 配置
+  - **OpenAI API**：设置 `OPENAI_API_KEY` 环境变量或通过 `config` 配置
+  - **关键词**（内置回退）：零依赖即可工作
 
-## Install as OpenClaw Skill
+## 作为 OpenClaw 技能安装
 
-Download `memory-tree.skill` from [Releases](https://github.com/Masongmx/memory-tree/releases) and install:
+从 [Releases](https://github.com/Masongmx/memory-tree/releases) 下载 `memory-tree.skill` 并安装：
 
 ```bash
 openclaw skill install memory-tree.skill
 ```
 
-Or clone and copy to your skills directory:
+或克隆并复制到你的技能目录：
 
 ```bash
 git clone https://github.com/Masongmx/memory-tree.git
 cp -r memory-tree/skill/* ~/.openclaw/workspace/skills/memory-tree/
 ```
 
-## Quick Start
+## 快速开始
 
 ```bash
-# One-time setup (auto-creates cron jobs + first index)
+# 一次性设置（自动创建定时任务 + 首次索引）
 python3 skills/memory-tree/scripts/memory_tree.py setup
 
-# View memory tree health
+# 查看记忆树健康状态
 python3 skills/memory-tree/scripts/memory_tree.py visualize
 
-# Semantic search
+# 语义搜索
 python3 skills/memory-tree/scripts/memory_tree.py search "how to fetch tweets"
 
-# Auto-decay (usually runs via cron)
+# 自动衰减（通常通过定时任务运行）
 python3 skills/memory-tree/scripts/memory_tree.py decay
 ```
 
-## Priority Labels
+## 优先级标签
 
-Use in `MEMORY.md` section headers to control decay speed:
+在 `MEMORY.md` 的章节标题中使用，用于控制衰减速度：
 
 ```markdown
-## [P0] Core Principles       # Never decays
-## [P1] Important Knowledge   # Slow decay (~5 months to archive)
-## [P2] Daily Notes           # Fast decay (~3.5 months to archive)
+## [P0] 核心原则        # 永不衰减
+## [P1] 重要知识        # 慢衰减（约5个月归档）
+## [P2] 日常笔记        # 快衰减（约3.5个月归档）
 ```
 
-No tag = P2 (default).
+无标签 = P2（默认）。
 
-## Data Files
+## 数据文件
 
-All data stored under `memory-tree/data/` in your workspace:
+所有数据存储在工作区的 `memory-tree/data/` 目录下：
 
-| File | Purpose |
+| 文件 | 用途 |
 |------|---------|
-| `confidence.json` | Confidence scores and metadata per knowledge block |
-| `embeddings.json` | Cached embedding vectors for semantic search |
-| `archive.json` | Archived knowledge records |
+| `confidence.json` | 每个知识块的置信度分数和元数据 |
+| `embeddings.json` | 语义搜索的缓存嵌入向量 |
+| `archive.json` | 已归档的知识记录 |
 
-## Architecture
+## 项目结构
 
 ```
 memory-tree/
-├── skill/                  # OpenClaw skill package
+├── skill/                  # OpenClaw 技能包
 │   ├── SKILL.md
 │   └── scripts/
 │       └── memory_tree.py
-├── core/                   # Standalone script (same file)
+├── core/                   # 独立脚本（同一文件）
 │   └── memory_tree.py
-├── ARTICLE.md              # Introduction article (中文)
-└── README.md               # This file
+├── ARTICLE.md              # 介绍文章（中文）
+└── README.md               # 本文件
 ```
 
-## Credit
+## 致谢
 
-Inspired by [Memory-Like-A-Tree](https://github.com/loryoncloud/Memory-Like-A-Tree) by [@loryoncloud](https://x.com/loryoncloud).
+灵感来自 [@loryoncloud](https://x.com/loryoncloud) 的 [Memory-Like-A-Tree](https://github.com/loryoncloud/Memory-Like-A-Tree) 项目。
 
-## License
+## 许可证
 
 MIT
