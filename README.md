@@ -17,6 +17,25 @@
 
 ---
 
+## 核心原理：置信度
+
+每条记忆有个"健康值"（0.0–1.0）：
+
+| 状态 | Emoji | 含义 |
+|------|-------|------|
+| 活跃 | 🌿 | 经常用，置信度 ≥0.8 |
+| 衰减中 | 🍂 | 偶尔用，0.5–0.8 |
+| 已归档 | 🪨 | 不用了，<0.3 |
+
+**变化规则**：
+- 被搜索命中：+0.03（用进）
+- 每天未访问：-0.004 到 -0.008（废退）
+- 标记 [P0]：永不衰减
+
+就像人类的记忆——常回忆的记得牢，不回忆的慢慢淡忘。
+
+---
+
 ## 你只需要知道两件事
 
 ### 1. 想回忆某事？
@@ -76,6 +95,12 @@ cp -r memory-tree/skill ~/.openclaw/workspace/skills/memory-tree
 ## 相关项目
 
 - [Lobster Doctor](https://github.com/Masongmx/lobster-doctor) — workspace 健康管理
+
+---
+
+## 致谢
+
+灵感来自 [@loryoncloud](https://x.com/loryoncloud) 的 [Memory-Like-A-Tree](https://github.com/loryoncloud/Memory-Like-A-Tree) 项目。
 
 ---
 
