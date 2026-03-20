@@ -1,12 +1,10 @@
 ---
 name: memory-tree
 description: >
-  Confidence-based memory lifecycle management for OpenClaw agents.
-  Uses local Ollama embeddings for semantic search and automatic confidence decay.
+  🌳 记忆树 — 置信度驱动的记忆生命周期管理。自动衰减+语义搜索+归档。
   Activate when user mentions: memory management, memory tree, 记忆树,
   memory lifecycle, confidence decay, memory cleanup, 记忆治理, 记忆衰减,
-  记忆健康, memory health, memory search, 搜索记忆, 记忆状态, 整理记忆,
-  衰减记忆, 记忆太多, MEMORY.md太大了.
+  记忆健康, memory health, memory search, 搜索记忆, MEMORY.md太大了.
 ---
 
 # 🌳 Memory Tree — 记忆树
@@ -95,12 +93,17 @@ python3 skills/memory-tree/scripts/memory_tree.py cleanup --auto
 
 ## 搜索后端（自动检测）
 
-| 优先级 | 后端 | 费用 | 要求 |
-|--------|------|------|------|
-| 1st | **Ollama**（本地） | 免费 | `ollama serve` + embedding 模型 |
-| 2nd | **智谱 API**（云端） | 极低 | `ZHIPU_API_KEY` 环境变量 |
-| 3rd | **OpenAI 兼容**（云端） | 按量 | `OPENAI_API_KEY` 环境变量 |
-| 4th | **关键词 fallback** | 免费 | 零依赖 |
+⚠️ **隐私说明**：本技能支持多种搜索后端。如果配置了云端 API Key（智谱/OpenAI），记忆内容会被发送到云端进行嵌入计算。如需纯本地运行，请确保：
+1. 启动 Ollama 并安装 embedding 模型
+2. 不设置 `ZHIPU_API_KEY` / `OPENAI_API_KEY` 环境变量
+3. 或手动配置 `python3 memory_tree.py config backend keyword`
+
+| 优先级 | 后端 | 费用 | 隐私 | 要求 |
+|--------|------|------|------|------|
+| 1st | **Ollama**（本地） | 免费 | ✅ 本地 | `ollama serve` + embedding 模型 |
+| 2nd | **智谱 API**（云端） | 极低 | ⚠️ 云端 | `ZHIPU_API_KEY` 环境变量 |
+| 3rd | **OpenAI 兼容**（云端） | 按量 | ⚠️ 云端 | `OPENAI_API_KEY` 环境变量 |
+| 4th | **关键词 fallback** | 免费 | ✅ 本地 | 零依赖 |
 
 无需手动配置——setup 脚本自动检测并使用最佳可用后端。
 

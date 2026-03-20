@@ -1,0 +1,9 @@
+{
+  "slug": "memory-tree",
+  "name": "Memory Tree",
+  "description": "Confidence-based memory lifecycle management for OpenClaw agents. Auto-decay, semantic search, archive.",
+  "version": "0.3.0",
+  "author": "Masongmx",
+  "tags": ["memory", "embedding", "search", "decay", "archive", "ollama"],
+  "license": "MIT-0"
+}
