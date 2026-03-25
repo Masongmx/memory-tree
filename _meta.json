@@ -1,0 +1,15 @@
+{
+  "slug": "memory-tree",
+  "name": "Memory Tree",
+  "description": "🌳 记忆树 v2.0 — 周报自动生成，永久记忆标记，关键词搜索。全自动运行。",
+  "version": "2.0.0",
+  "author": "Masongmx",
+  "tags": [
+    "memory",
+    "weekly-report",
+    "permanent-memory",
+    "search",
+    "archive"
+  ],
+  "license": "MIT"
+}
