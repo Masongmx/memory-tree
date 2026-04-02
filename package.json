@@ -1,0 +1,46 @@
+{
+  "name": "memory-tree",
+  "version": "3.0.0",
+  "description": "🌳 记忆树 — 让 agent 记住该记的，忘记该忘的。三层记忆架构，多策略检索。",
+  "main": "scripts/memory_tree.py",
+  "author": "Masongmx",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "weekly-report",
+    "permanent-memory",
+    "search",
+    "archive",
+    "three-tier",
+    "multi-strategy-retrieval"
+  ],
+  "engines": {
+    "openclaw": ">=0.3.0"
+  },
+  "scripts": {
+    "weekly": "python3 scripts/memory_tree.py weekly",
+    "search": "python3 scripts/memory_tree.py search",
+    "vector-search": "python3 scripts/memory_tree.py vector-search",
+    "mark": "python3 scripts/memory_tree.py mark",
+    "decay": "python3 scripts/memory_tree.py decay",
+    "health": "python3 scripts/memory_tree.py health",
+    "importance": "python3 scripts/memory_tree.py importance",
+    "conflict": "python3 scripts/memory_tree.py conflict"
+  },
+  "config": {
+    "defaultModel": "local",
+    "requiresNet": false,
+    "autoRun": {
+      "command": "weekly",
+      "schedule": "0 9 * * 1"
+    }
+  },
+  "dependencies": {
+    "ollama": ">=0.1.0"
+  },
+  "files": [
+    "SKILL.md",
+    "scripts/",
+    "tests/"
+  ]
+}
