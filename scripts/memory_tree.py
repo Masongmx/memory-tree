@@ -40,7 +40,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # 导入公共模块
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "common"))
+# 注意：scripts 目录优先，用于导入本目录的 vector_store.py
+sys.path.insert(0, str(Path(__file__).parent))  # scripts 目录
+sys.path.insert(1, str(Path(__file__).parent.parent.parent / "common"))  # common 目录
 from utils import (
     load_json, save_json, file_hash, file_age_days, text_hash,
     estimate_tokens, fmt_tokens, fmt_size,
@@ -989,8 +991,8 @@ def cmd_importance(args):
 
 
 def cmd_decay(args):
-    """遗忘预测 — 显示可能不再有用的记忆，提醒用户确认"""
-    results = {"blocks": [], "to_review": []}
+    """遗忘预测 — 显示可能不再有用的记忆，提醒用户确认（分类衰变预测）"""
+    results = {"blocks": [], "to_review": [], "category_stats": {}, "decay_predictions": {}}
     
     if not MEMORY_MD.exists():
         if getattr(args, 'json', False):
@@ -1002,67 +1004,137 @@ def cmd_decay(args):
     content = MEMORY_MD.read_text(encoding='utf-8')
     blocks = parse_memory_blocks(content)
     
+    # 分类统计
+    category_counts = {"strategy": 0, "fact": 0, "assumption": 0, "failure": 0, "default": 0}
+    
     for block in blocks:
         if block["is_permanent"]:
             results["blocks"].append({
                 "title": block["title"],
                 "status": "permanent",
-                "weight": 1.0
+                "strength": 1.0,
+                "category": "permanent"
             })
             continue
         
+        # 分类记忆类型
+        category = classify_memory_category(block["title"], block.get("body", ""))
+        category_counts[category] += 1
+        
         # 检查最后提及时间
         days = estimate_days_since_mention(block["content"] if "content" in block else block["body"])
-        weight = calculate_decay_weight(days)
+        
+        # 使用新的 calculate_strength 函数
+        strength = calculate_strength(days, category, recall_count=0)
         
         entry = {
             "title": block["title"],
             "days": days,
-            "weight": round(weight, 2),
-            "status": "ok" if weight > 0.3 else "warning" if weight > 0.1 else "review"
+            "strength": round(strength, 2),
+            "category": category,
+            "decay_rate": get_category_decay_rate(category),
+            "status": "ok" if strength > PROMOTE_THRESHOLD else "warning" if strength > FORGET_THRESHOLD else "forget"
         }
         results["blocks"].append(entry)
         
         # 权重低的记忆需要用户确认是否清理
-        if weight < 0.3:
+        if strength < PROMOTE_THRESHOLD:
             results["to_review"].append({
                 "title": block["title"],
                 "days": days,
-                "weight": round(weight, 2)
+                "strength": round(strength, 2),
+                "category": category
             })
+    
+    # 分类统计
+    results["category_stats"] = category_counts
+    
+    # 衰变预测（按类别）
+    decay_predictions = {}
+    for category, decay_rate in DECAY_RATES.items():
+        if category == "default":
+            continue
+        # 计算各时间点的预测保留率
+        predictions = {}
+        for days in [1, 7, 14, 30, 60, 90]:
+            strength = calculate_strength(days, category, recall_count=0)
+            predictions[f"{days}天"] = round(strength, 2)
+        # 计算衰减到 FORGET_THRESHOLD 需要的天数
+        # strength = e^(-days * decay_rate) = FORGET_THRESHOLD
+        # days = -ln(FORGET_THRESHOLD) / decay_rate
+        forget_days = round(-math.log(FORGET_THRESHOLD) / decay_rate, 1)
+        # 计算衰减到 PROMOTE_THRESHOLD 需要的天数（低于此值不再推荐标记）
+        promote_days = round(-math.log(PROMOTE_THRESHOLD) / decay_rate, 1)
+        decay_predictions[category] = {
+            "decay_rate": decay_rate,
+            "predictions": predictions,
+            "forget_days": forget_days,
+            "promote_days": promote_days
+        }
+    results["decay_predictions"] = decay_predictions
     
     if getattr(args, 'json', False):
         print(json.dumps(results, indent=2, ensure_ascii=False))
         return results
     
     # 终端输出
-    print(f"🌳 记忆树 — 遗忘预测 ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n")
+    print(f"🌳 记忆树 — 遗忘预测（分类衰变） ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n")
     
-    review = [b for b in results["blocks"] if b["status"] == "review"]
+    # 输出分类衰变预测表
+    print("📊 分类衰变预测表:")
+    print("┌────────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐")
+    print("│ 类别       │ 衰变率   │ 1天      │ 7天      │ 14天     │ 30天     │ 遗忘天数 │ 推荐天数 │")
+    print("├────────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┤")
+    for category, pred in decay_predictions.items():
+        cat_name = {"strategy": "策略", "fact": "事实", "assumption": "假设", "failure": "失败"}.get(category, category)
+        print(f"│ {cat_name:10} │ {pred['decay_rate']:8.2f} │ {pred['predictions']['1天']:8.2f} │ {pred['predictions']['7天']:8.2f} │ {pred['predictions']['14天']:8.2f} │ {pred['predictions']['30天']:8.2f} │ {pred['forget_days']:8.1f} │ {pred['promote_days']:8.1f} │")
+    print("└────────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘")
+    print()
+    print(f"阈值说明: FORGET_THRESHOLD={FORGET_THRESHOLD}, PROMOTE_THRESHOLD={PROMOTE_THRESHOLD}")
+    print()
+    
+    # 分类统计
+    print("📋 记忆分类统计:")
+    for category, count in category_counts.items():
+        if count > 0:
+            cat_name = {"strategy": "策略", "fact": "事实", "assumption": "假设", "failure": "失败", "default": "未分类"}.get(category, category)
+            decay_rate = get_category_decay_rate(category)
+            print(f"   {cat_name}: {count} 条 (衰变率: {decay_rate})")
+    print()
+    
+    # 按状态分组
+    forget = [b for b in results["blocks"] if b["status"] == "forget"]
     warning = [b for b in results["blocks"] if b["status"] == "warning"]
     ok = [b for b in results["blocks"] if b["status"] == "ok"]
-    permanent = [b for b in results["blocks"] if b["status"] == "permanent"]
+    permanent = [b for b in results["blocks"] if b.get("category") == "permanent"]
     
     if permanent:
-        print(f"📌 永久记忆 ({len(permanent)} 条，永不清理):")
+        print(f"📌 永久记忆 ({len(permanent)} 条，永不遗忘):")
         for b in permanent[:10]:
             print(f"   {b['title']}")
         print()
     
     if ok:
-        print(f"🟢 健康 ({len(ok)} 条，权重 > 0.3)")
-    
-    if warning:
-        print(f"🟡 关注 ({len(warning)} 条，权重 0.1-0.3):")
-        for b in warning[:10]:
-            print(f"   {b['title']} (权重: {b['weight']}, {b['days']}天前)")
+        print(f"🟢 健康 ({len(ok)} 条，strength > {PROMOTE_THRESHOLD}):")
+        for b in ok[:5]:
+            cat_name = {"strategy": "策略", "fact": "事实", "assumption": "假设", "failure": "失败"}.get(b.get("category", "default"), b.get("category", "default"))
+            print(f"   [{cat_name}] {b['title'][:40]} (强度: {b['strength']})")
+        if len(ok) > 5:
+            print(f"   ... 还有 {len(ok) - 5} 条")
         print()
     
-    if review:
-        print(f"🔴 需确认 ({len(review)} 条，权重 < 0.3):")
-        print("   以下记忆可能不再有用，请确认是否要清理：")
-        for b in review[:10]:
-            print(f"   • {b['title']} (权重: {b['weight']}, {b['days']}天前)")
+    if warning:
+        print(f"🟡 关注 ({len(warning)} 条，strength {FORGET_THRESHOLD}-{PROMOTE_THRESHOLD}):")
+        for b in warning[:10]:
+            cat_name = {"strategy": "策略", "fact": "事实", "assumption": "假设", "failure": "失败"}.get(b.get("category", "default"), b.get("category", "default"))
+            print(f"   [{cat_name}] {b['title'][:40]} ({b['days']}天, 强度: {b['strength']})")
+        print()
+    
+    if forget:
+        print(f"🔴 建议遗忘 ({len(forget)} 条，strength < {FORGET_THRESHOLD}):")
+        for b in forget[:10]:
+            cat_name = {"strategy": "策略", "fact": "事实", "assumption": "假设", "failure": "失败"}.get(b.get("category", "default"), b.get("category", "default"))
+            print(f"   [{cat_name}] {b['title'][:40]} ({b['days']}天, 强度: {b['strength']})")
         print()
         print("⚠️  不会自动清理，需要你确认")
         print("   说「保留 xxx」或「删除 xxx」来操作")
@@ -1571,10 +1643,70 @@ def cmd_mark(args):
     return results
 
 
-# ==================== 向量搜索 ====================
+# ==================== 向量搜索（多策略融合）====================
+
+def score_fusion(results_dict, weights=None):
+    """
+    多策略分数融合
+    
+    Args:
+        results_dict: {strategy_name: [results_list]}
+        weights: {strategy_name: weight} 默认 semantic:0.5, keyword:0.3, temporal:0.2
+    
+    Returns:
+        list: 融合后的排序结果 [{id, title, content, total_score, scores, is_permanent}, ...]
+    """
+    if weights is None:
+        weights = {"semantic": 0.50, "keyword": 0.30, "temporal": 0.20}
+    
+    # 按id聚合所有策略的分数
+    aggregated = {}
+    
+    for strategy, results in results_dict.items():
+        for r in results:
+            id_key = r['id']
+            if id_key not in aggregated:
+                aggregated[id_key] = {
+                    "id": r['id'],
+                    "title": r['title'],
+                    "content": r.get('content', ''),
+                    "scores": {},
+                    "is_permanent": r.get('is_permanent', False)
+                }
+            aggregated[id_key]["scores"][strategy] = r['score']
+    
+    # 计算加权总分
+    final_results = []
+    for id_key, data in aggregated.items():
+        total_score = 0
+        for strategy, weight in weights.items():
+            strategy_score = data["scores"].get(strategy, 0)
+            total_score += strategy_score * weight
+        
+        # 永久记忆加分
+        if data["is_permanent"]:
+            total_score += 0.1
+        
+        data["total_score"] = round(total_score, 3)
+        final_results.append(data)
+    
+    # 按总分排序
+    final_results.sort(key=lambda x: x["total_score"], reverse=True)
+    
+    return final_results
+
 
 def cmd_vector_search(args):
-    """向量搜索（替代关键词搜索）"""
+    """
+    多策略向量搜索（semantic + keyword + temporal）
+    
+    P1 整改：参考 clawmind 4策略并行检索
+    - semantic (50%): 向量语义相似度
+    - keyword (30%): FTS5 全文搜索
+    - temporal (20%): 时间衰减权重
+    
+    暂不实现 graph（需要实体解析先完成）
+    """
     # 依赖检查
     missing = check_vector_dependencies()
     if missing:
@@ -1587,37 +1719,100 @@ def cmd_vector_search(args):
         print("   ollama pull qwen3-embedding  # 安装 embedding 模型")
         return {"query": getattr(args, 'query', ''), "matches": [], "error": "missing dependencies"}
     
-    from vector_store import search_memories, sync_from_markdown, DB_PATH, get_stats
+    from vector_store import (
+        search_memories, keyword_search, temporal_search,
+        sync_incremental, rebuild_fts_index, DB_PATH, get_stats, init_db, migrate_db
+    )
     
-    results = {"query": getattr(args, 'query', ''), "matches": []}
+    results = {"query": getattr(args, 'query', ''), "matches": [], "strategies": {}}
+    
+    # 迁移数据库（添加新字段）
+    migrate_db()
     
     # 强制同步或首次使用时自动同步
     if getattr(args, 'sync', False) or not DB_PATH.exists():
-        count = sync_from_markdown()
-        print(f"📥 同步完成: {count} 条记忆\n")
+        sync_result = sync_incremental()
+        print(f"📥 同步完成: 新增 {sync_result['added']} + 更新 {sync_result['updated']} 条\n")
+        # 重建FTS索引
+        rebuild_fts_index()
     
     query = getattr(args, 'query', '')
+    top_k = getattr(args, 'top_k', 10)
+    
     if not query or query == "空查询":
         # 显示统计
         stats = get_stats()
+        conn = init_db()
+        try:
+            fts_count = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
+        except Exception:
+            fts_count = 0
+        conn.close()
+        
         print(f"📊 向量存储统计:")
         print(f"   总记忆: {stats['total']} 条")
         print(f"   永久记忆: {stats['permanent']} 条")
+        print(f"   FTS索引: {fts_count} 条")
         print(f"   数据库: {stats['db_path']}")
+        print(f"\n💡 多策略权重:")
+        print(f"   semantic: 50% | keyword: 30% | temporal: 20%")
         return results
     
-    matches = search_memories(query, top_k=getattr(args, 'top_k', 5))
+    # === 并行执行三种策略 ===
+    results_by_strategy = {}
+    
+    # 1. Semantic 向量检索
+    try:
+        semantic_results = search_memories(query, top_k=top_k * 2)
+        results_by_strategy["semantic"] = semantic_results
+        results["strategies"]["semantic"] = len(semantic_results)
+    except Exception as e:
+        print(f"⚠️ 语义检索失败: {e}")
+        results_by_strategy["semantic"] = []
+        results["strategies"]["semantic"] = 0
+    
+    # 2. Keyword FTS5 检索
+    try:
+        keyword_results = keyword_search(query, top_k=top_k)
+        results_by_strategy["keyword"] = keyword_results
+        results["strategies"]["keyword"] = len(keyword_results)
+    except Exception as e:
+        print(f"⚠️ 关键词检索失败: {e}")
+        results_by_strategy["keyword"] = []
+        results["strategies"]["keyword"] = 0
+    
+    # 3. Temporal 时间检索
+    try:
+        temporal_results = temporal_search(top_k=top_k)
+        results_by_strategy["temporal"] = temporal_results
+        results["strategies"]["temporal"] = len(temporal_results)
+    except Exception as e:
+        print(f"⚠️ 时间检索失败: {e}")
+        results_by_strategy["temporal"] = []
+        results["strategies"]["temporal"] = 0
+    
+    # === Score Fusion ===
+    weights = {"semantic": 0.50, "keyword": 0.30, "temporal": 0.20}
+    fused_results = score_fusion(results_by_strategy, weights=weights)
+    
+    # 截取 top_k
+    matches = fused_results[:top_k]
     results["matches"] = matches
     
     if getattr(args, 'json', False):
         print(json.dumps(results, indent=2, ensure_ascii=False))
         return results
     
-    print(f"🔍 向量搜索: \"{query}\"\n")
+    # 终端输出
+    print(f"🔍 多策略检索: \"{query}\" (Top {top_k})\n")
+    print(f"策略结果数: semantic({results['strategies']['semantic']}) + keyword({results['strategies']['keyword']}) + temporal({results['strategies']['temporal']})\n")
+    
     for i, r in enumerate(matches, 1):
         marker = "📌" if r.get("is_permanent") else "  "
-        print(f"  {i}. {marker}[{r['score']:.3f}] {r['title']}")
-        preview = r['content'][:100].replace('\n', ' ').strip()
+        scores_str = " | ".join(f"{k}:{v:.2f}" for k, v in r.get("scores", {}).items())
+        print(f"  {i}. {marker}[{r['total_score']:.3f}] {r['title'][:50]}")
+        print(f"     分解: {scores_str}")
+        preview = r.get('content', '')[:100].replace('\n', ' ').strip()
         if preview:
             print(f"     {preview}...")
         print()

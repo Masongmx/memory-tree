@@ -100,14 +100,11 @@ def keyword_search(query, top_k=10):
         list: [{id, title, score, is_permanent}, ...]
     """
     conn = init_db()
-    
-    # FTS5 查询（使用 bm25 排序）
-    # 注意：中文需要特殊处理，SQLite FTS5 默认不支持中文分词
-    # 使用简单的模糊匹配作为fallback
     results = []
+    use_like_fallback = False
     
+    # 尝试FTS5查询
     try:
-        # 尝试FTS5查询
         rows = conn.execute("""
             SELECT m.id, m.title, m.content, m.is_permanent, 
                    bm25(memories_fts) as fts_score
@@ -118,30 +115,47 @@ def keyword_search(query, top_k=10):
             LIMIT ?
         """, (query, top_k * 2)).fetchall()
         
-        # bm25 返回负数，越小越好，需要转换为正数分数
-        max_score = 0
-        for row in rows:
-            raw_score = row[4] if row[4] else 0
-            if raw_score < max_score:
-                max_score = raw_score
-        
-        for row in rows:
-            raw_score = row[4] if row[4] else 0
-            # 将bm25负数转换为0-1的正数分数
-            # bm25越小越好，所以用 max_score - raw_score
-            normalized_score = max(0, (max_score - raw_score) / (abs(max_score) + 1))
-            results.append({
-                "id": row[0],
-                "title": row[1],
-                "content": row[2][:200],
-                "score": round(normalized_score, 3),
-                "is_permanent": bool(row[3])
-            })
+        # 如果FTS5返回空结果（中文问题），切换到LIKE fallback
+        if not rows:
+            use_like_fallback = True
+        else:
+            # bm25 返回负数，越小越好，需要转换为正数分数
+            max_score = 0
+            for row in rows:
+                raw_score = row[4] if row[4] else 0
+                if raw_score < max_score:
+                    max_score = raw_score
+            
+            for row in rows:
+                raw_score = row[4] if row[4] else 0
+                normalized_score = max(0, (max_score - raw_score) / (abs(max_score) + 1))
+                results.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "content": row[2][:200],
+                    "score": round(normalized_score, 3),
+                    "is_permanent": bool(row[3])
+                })
     
     except sqlite3.OperationalError:
-        # FTS5不支持中文或查询失败，fallback到简单的LIKE匹配
-        keywords = query.split()
-        for kw in keywords[:3]:  # 最多3个关键词
+        # FTS5查询语法错误，使用LIKE fallback
+        use_like_fallback = True
+    
+    # LIKE fallback（用于中文或FTS5失败）
+    if use_like_fallback:
+        # 将查询拆分为关键词（支持中文字符）
+        keywords = []
+        # 提取中文单字
+        for char in query:
+            if '\u4e00' <= char <= '\u9fff':
+                keywords.append(char)
+        # 提取英文单词
+        import re
+        for word in re.findall(r'[a-zA-Z]{2,}', query.lower()):
+            keywords.append(word)
+        
+        # 每个关键词单独搜索，合并结果
+        for kw in keywords[:5]:  # 最多5个关键词
             rows = conn.execute("""
                 SELECT id, title, content, is_permanent
                 FROM memories
@@ -155,8 +169,11 @@ def keyword_search(query, top_k=10):
                 content_matches = row[2].lower().count(kw.lower())
                 score = min(1.0, (title_matches * 0.3 + content_matches * 0.1))
                 
-                # 避免重复
-                if not any(r['id'] == row[0] for r in results):
+                # 避免重复，更新分数
+                existing = next((r for r in results if r['id'] == row[0]), None)
+                if existing:
+                    existing['score'] = max(existing['score'], score)
+                else:
                     results.append({
                         "id": row[0],
                         "title": row[1],
