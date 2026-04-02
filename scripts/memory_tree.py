@@ -1590,6 +1590,12 @@ def cmd_mark(args):
     title_keyword = args.keyword
     results = {"success": False, "title": None}
     
+    # P0 修复：空字符串检查
+    if not title_keyword or not title_keyword.strip():
+        print("❌ 请提供要标记的记忆关键词")
+        print("   用法: mark \"标题关键词\"")
+        return results
+    
     if not MEMORY_MD.exists():
         print("❌ MEMORY.md 不存在")
         return results
