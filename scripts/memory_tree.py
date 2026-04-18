@@ -42,14 +42,103 @@ from pathlib import Path
 # 导入公共模块
 # 注意：scripts 目录优先，用于导入本目录的 vector_store.py
 sys.path.insert(0, str(Path(__file__).parent))  # scripts 目录
-sys.path.insert(1, str(Path(__file__).parent.parent.parent / "common"))  # common 目录
-from utils import (
-    load_json, save_json, file_hash, file_age_days, text_hash,
-    estimate_tokens, fmt_tokens, fmt_size,
-    parse_memory_blocks,
-    detect_enabled_channels, get_feishu_chat_id,
-    WORKSPACE, OPENCLAW_CONFIG
-)
+try:
+    sys.path.insert(1, str(Path(__file__).parent.parent.parent / "common"))  # common 目录
+    from utils import (
+        load_json, save_json, file_hash, file_age_days, text_hash,
+        estimate_tokens, fmt_tokens, fmt_size,
+        parse_memory_blocks,
+        detect_enabled_channels, get_feishu_chat_id,
+        WORKSPACE, OPENCLAW_CONFIG
+    )
+except ImportError:
+    # P0 修复：内联实现缺失的函数，避免外部依赖崩溃
+    from pathlib import Path
+
+    WORKSPACE = Path.home() / ".openclaw" / "workspace"
+    OPENCLAW_CONFIG = WORKSPACE / "config.json"
+
+    def load_json(path, default=None):
+        import json
+        try:
+            return json.loads(Path(path).read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return default if default is not None else {}
+
+    def save_json(path, data):
+        import json
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+    def file_hash(path):
+        import hashlib
+        return hashlib.md5(Path(path).read_bytes()).hexdigest()[:8]
+
+    def file_age_days(path):
+        from datetime import datetime
+        mtime = datetime.fromtimestamp(Path(path).stat().st_mtime)
+        return (datetime.now() - mtime).days
+
+    def text_hash(text):
+        import hashlib
+        return hashlib.md5(text.encode()).hexdigest()[:8]
+
+    def estimate_tokens(text):
+        return len(text) // 4
+
+    def fmt_tokens(tokens):
+        return f"{tokens:,}"
+
+    def fmt_size(size):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024:
+                return f"{size:.1f}{unit}"
+            size /= 1024
+        return f"{size:.1f}TB"
+
+    def parse_memory_blocks(content):
+        """解析 MEMORY.md 格式的记忆块"""
+        blocks = []
+        if not content:
+            return blocks
+
+        current_block = None
+        lines = content.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith('## '):
+                if current_block:
+                    blocks.append(current_block)
+                title = line[3:].strip()
+                is_permanent = '📌' in title or '[P0]' in title
+                current_block = {
+                    'title': title.replace('📌', '').replace('[P0]', '').replace('[P1]', '').strip(),
+                    'body': '',
+                    'is_permanent': is_permanent,
+                    'priority': 'P0' if is_permanent else 'P2',
+                    'full_text': title
+                }
+            elif current_block is not None:
+                current_block['body'] += line + '\n'
+                current_block['full_text'] += '\n' + line
+                if '[P0]' in line or '[P1]' in line:
+                    current_block['is_permanent'] = True
+                    current_block['priority'] = 'P0' if '[P0]' in line else 'P1'
+            i += 1
+
+        if current_block:
+            blocks.append(current_block)
+
+        for block in blocks:
+            block['body'] = block['body'].strip()
+            block['full_text'] = block['full_text'].strip()
+        return blocks
+
+    def detect_enabled_channels():
+        return []
+
+    def get_feishu_chat_id(config):
+        return None
 
 # ==================== 路径配置 ====================
 MEMORY_MD = WORKSPACE / "MEMORY.md"
@@ -118,7 +207,6 @@ def check_extractor_dependencies():
     return missing
 
 
-# parse_memory_blocks 现已从 common/utils.py 导入
 
 
 def get_permanent_memories():

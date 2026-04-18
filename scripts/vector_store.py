@@ -10,6 +10,7 @@ import json
 import numpy as np
 import requests
 from pathlib import Path
+from contextlib import contextmanager
 
 WORKSPACE = Path.home() / ".openclaw" / "workspace"
 DB_PATH = WORKSPACE / "memory" / "memory_vectors.db"
@@ -17,55 +18,65 @@ OLLAMA_URL = "http://localhost:11434/api/embeddings"
 DEFAULT_MODEL = "qwen3-embedding"
 
 
-def get_embedding(text, model=DEFAULT_MODEL):
-    """调用Ollama获取embedding向量"""
-    resp = requests.post(
-        OLLAMA_URL,
-        json={"model": model, "prompt": text},
-        timeout=30
-    )
-    resp.raise_for_status()
-    return resp.json()["embedding"]
+def get_embedding(text, model=DEFAULT_MODEL, max_retries=3):
+    """调用Ollama获取embedding向量，失败时返回None"""
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(
+                OLLAMA_URL,
+                json={"model": model, "prompt": text},
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()["embedding"]
+        except (requests.RequestException, KeyError, ValueError) as e:
+            if attempt == max_retries:
+                print(f"⚠️ Embedding失败 ({model}): {e}")
+                return None
+            print(f"⚠️ Embedding尝试 {attempt}/{max_retries} 失败: {e}")
 
 
+@contextmanager
 def init_db():
     """初始化SQLite数据库（含FTS5全文搜索索引）"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
-    
-    # 主表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            block_type TEXT DEFAULT 'normal',
-            category TEXT DEFAULT '其他',
-            is_permanent INTEGER DEFAULT 0,
-            confidence REAL DEFAULT 0.5,
-            source TEXT DEFAULT '',
-            last_mention TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            embedding BLOB
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_category ON memories(category)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_permanent ON memories(is_permanent)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_last_mention ON memories(last_mention)")
-    
-    # FTS5 全文搜索虚表
-    conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-            title,
-            content,
-            content='memories',
-            content_rowid='id'
-        )
-    """)
-    
-    conn.commit()
-    return conn
+    try:
+        # 主表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                block_type TEXT DEFAULT 'normal',
+                category TEXT DEFAULT '其他',
+                is_permanent INTEGER DEFAULT 0,
+                confidence REAL DEFAULT 0.5,
+                source TEXT DEFAULT '',
+                last_mention TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                embedding BLOB
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_category ON memories(category)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_permanent ON memories(is_permanent)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_last_mention ON memories(last_mention)")
+
+        # FTS5 全文搜索虚表
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                title,
+                content,
+                content='memories',
+                content_rowid='id'
+            )
+        """)
+
+        conn.commit()
+        yield conn
+    finally:
+        conn.close()
 
 
 def rebuild_fts_index():
@@ -100,93 +111,94 @@ def keyword_search(query, top_k=10):
         list: [{id, title, score, is_permanent}, ...]
     """
     conn = init_db()
-    results = []
-    use_like_fallback = False
-    
-    # 尝试FTS5查询
     try:
-        rows = conn.execute("""
-            SELECT m.id, m.title, m.content, m.is_permanent, 
-                   bm25(memories_fts) as fts_score
-            FROM memories_fts f
-            JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ?
-            ORDER BY bm25(memories_fts)
-            LIMIT ?
-        """, (query, top_k * 2)).fetchall()
-        
-        # 如果FTS5返回空结果（中文问题），切换到LIKE fallback
-        if not rows:
-            use_like_fallback = True
-        else:
-            # bm25 返回负数，越小越好，需要转换为正数分数
-            max_score = 0
-            for row in rows:
-                raw_score = row[4] if row[4] else 0
-                if raw_score < max_score:
-                    max_score = raw_score
-            
-            for row in rows:
-                raw_score = row[4] if row[4] else 0
-                normalized_score = max(0, (max_score - raw_score) / (abs(max_score) + 1))
-                results.append({
-                    "id": row[0],
-                    "title": row[1],
-                    "content": row[2][:200],
-                    "score": round(normalized_score, 3),
-                    "is_permanent": bool(row[3])
-                })
-    
-    except sqlite3.OperationalError:
-        # FTS5查询语法错误，使用LIKE fallback
-        use_like_fallback = True
-    
-    # LIKE fallback（用于中文或FTS5失败）
-    if use_like_fallback:
-        # 将查询拆分为关键词（支持中文字符）
-        keywords = []
-        # 提取中文单字
-        for char in query:
-            if '\u4e00' <= char <= '\u9fff':
-                keywords.append(char)
-        # 提取英文单词
-        import re
-        for word in re.findall(r'[a-zA-Z]{2,}', query.lower()):
-            keywords.append(word)
-        
-        # 每个关键词单独搜索，合并结果
-        for kw in keywords[:5]:  # 最多5个关键词
+        results = []
+        use_like_fallback = False
+
+        # 尝试FTS5查询
+        try:
             rows = conn.execute("""
-                SELECT id, title, content, is_permanent
-                FROM memories
-                WHERE title LIKE ? OR content LIKE ?
+                SELECT m.id, m.title, m.content, m.is_permanent,
+                       bm25(memories_fts) as fts_score
+                FROM memories_fts f
+                JOIN memories m ON f.rowid = m.id
+                WHERE memories_fts MATCH ?
+                ORDER BY bm25(memories_fts)
                 LIMIT ?
-            """, (f'%{kw}%', f'%{kw}%', top_k)).fetchall()
-            
-            for row in rows:
-                # 简单的匹配分数
-                title_matches = row[1].lower().count(kw.lower())
-                content_matches = row[2].lower().count(kw.lower())
-                score = min(1.0, (title_matches * 0.3 + content_matches * 0.1))
-                
-                # 避免重复，更新分数
-                existing = next((r for r in results if r['id'] == row[0]), None)
-                if existing:
-                    existing['score'] = max(existing['score'], score)
-                else:
+            """, (query, top_k * 2)).fetchall()
+
+            # 如果FTS5返回空结果（中文问题），切换到LIKE fallback
+            if not rows:
+                use_like_fallback = True
+            else:
+                # bm25 返回负数，越小越好，需要转换为正数分数
+                max_score = 0
+                for row in rows:
+                    raw_score = row[4] if row[4] else 0
+                    if raw_score < max_score:
+                        max_score = raw_score
+
+                for row in rows:
+                    raw_score = row[4] if row[4] else 0
+                    normalized_score = max(0, (max_score - raw_score) / (abs(max_score) + 1))
                     results.append({
                         "id": row[0],
                         "title": row[1],
                         "content": row[2][:200],
-                        "score": round(score, 3),
+                        "score": round(normalized_score, 3),
                         "is_permanent": bool(row[3])
                     })
-    
-    conn.close()
-    
-    # 按分数排序
-    results.sort(key=lambda x: x['score'], reverse=True)
-    return results[:top_k]
+
+        except sqlite3.OperationalError:
+            # FTS5查询语法错误，使用LIKE fallback
+            use_like_fallback = True
+
+        # LIKE fallback（用于中文或FTS5失败）
+        if use_like_fallback:
+            # 将查询拆分为关键词（支持中文字符）
+            keywords = []
+            # 提取中文单字
+            for char in query:
+                if '\u4e00' <= char <= '\u9fff':
+                    keywords.append(char)
+            # 提取英文单词
+            import re
+            for word in re.findall(r'[a-zA-Z]{2,}', query.lower()):
+                keywords.append(word)
+
+            # 每个关键词单独搜索，合并结果
+            for kw in keywords[:5]:  # 最多5个关键词
+                rows = conn.execute("""
+                    SELECT id, title, content, is_permanent
+                    FROM memories
+                    WHERE title LIKE ? OR content LIKE ?
+                    LIMIT ?
+                """, (f'%{kw}%', f'%{kw}%', top_k)).fetchall()
+
+                for row in rows:
+                    # 简单的匹配分数
+                    title_matches = row[1].lower().count(kw.lower())
+                    content_matches = row[2].lower().count(kw.lower())
+                    score = min(1.0, (title_matches * 0.3 + content_matches * 0.1))
+
+                    # 避免重复，更新分数
+                    existing = next((r for r in results if r['id'] == row[0]), None)
+                    if existing:
+                        existing['score'] = max(existing['score'], score)
+                    else:
+                        results.append({
+                            "id": row[0],
+                            "title": row[1],
+                            "content": row[2][:200],
+                            "score": round(score, 3),
+                            "is_permanent": bool(row[3])
+                        })
+
+        # 按分数排序
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:top_k]
+    finally:
+        conn.close()
 
 
 def temporal_search(top_k=10, decay_days=30):
@@ -296,6 +308,10 @@ def store_memory(title, content, is_permanent=False, block_type="normal"):
     """存储一条记忆（含向量）"""
     conn = init_db()
     embedding = get_embedding(f"{title}\n{content}")
+    if embedding is None:
+        print(f"⚠️ 存储失败（无embedding）: {title}")
+        conn.close()
+        return
     embedding_blob = json.dumps(embedding)
     conn.execute(
         "INSERT INTO memories (title, content, block_type, is_permanent, embedding) VALUES (?, ?, ?, ?, ?)",
@@ -308,14 +324,18 @@ def store_memory(title, content, is_permanent=False, block_type="normal"):
 def search_memories(query, top_k=5):
     """向量检索 — 返回最相关的记忆"""
     conn = init_db()
-    query_embedding = np.array(get_embedding(query))
-    
+    query_embedding = get_embedding(query)
+    if query_embedding is None:
+        conn.close()
+        return []
+
     results = []
+    query_vec = np.array(query_embedding)
     for row in conn.execute("SELECT id, title, content, embedding, is_permanent FROM memories"):
         mid, title, content, emb_blob, is_permanent = row
         emb = np.array(json.loads(emb_blob))
         # 余弦相似度
-        similarity = np.dot(query_embedding, emb) / (np.linalg.norm(query_embedding) * np.linalg.norm(emb))
+        similarity = np.dot(query_vec, emb) / (np.linalg.norm(query_vec) * np.linalg.norm(emb))
         results.append({
             "id": mid, 
             "title": title, 
@@ -362,7 +382,8 @@ def sync_from_markdown():
     embeddings = []
     for block in blocks:
         emb = get_embedding(f"{block['title']}\n{block['content']}")
-        embeddings.append((block, emb))
+        if emb is not None:
+            embeddings.append((block, emb))
     
     # 在一个事务中完成清空和插入
     conn = init_db()
@@ -419,12 +440,17 @@ def memory_exists_similar(title, content, threshold=0.9):
     if not rows:
         conn.close()
         return False
-    
-    new_emb = np.array(get_embedding(f"{title}\n{content}"))
-    
+
+    new_emb = get_embedding(f"{title}\n{content}")
+    if new_emb is None:
+        conn.close()
+        return False
+
+    new_vec = np.array(new_emb)
+
     for row in rows:
         existing_emb = np.array(json.loads(row[0]))
-        sim = np.dot(new_emb, existing_emb) / (np.linalg.norm(new_emb) * np.linalg.norm(existing_emb))
+        sim = np.dot(new_vec, existing_emb) / (np.linalg.norm(new_vec) * np.linalg.norm(existing_emb))
         if sim > threshold:
             conn.close()
             return True
@@ -534,19 +560,21 @@ def sync_incremental():
         if existing is None:
             # 新记忆
             embedding = get_embedding(f"{block['title']}\n{block['content']}")
-            conn.execute(
-                "INSERT INTO memories (title, content, is_permanent, embedding, last_mention) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (block["title"], block["content"], int(block["is_permanent"]), json.dumps(embedding))
-            )
-            added += 1
+            if embedding is not None:
+                conn.execute(
+                    "INSERT INTO memories (title, content, is_permanent, embedding, last_mention) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (block["title"], block["content"], int(block["is_permanent"]), json.dumps(embedding))
+                )
+                added += 1
         elif existing[1] != block["content"] or existing[2] != int(block["is_permanent"]):
             # 内容有变化
             embedding = get_embedding(f"{block['title']}\n{block['content']}")
-            conn.execute(
-                "UPDATE memories SET content=?, is_permanent=?, embedding=?, updated_at=CURRENT_TIMESTAMP, last_mention=CURRENT_TIMESTAMP WHERE id=?",
-                (block["content"], int(block["is_permanent"]), json.dumps(embedding), existing[0])
-            )
-            updated += 1
+            if embedding is not None:
+                conn.execute(
+                    "UPDATE memories SET content=?, is_permanent=?, embedding=?, updated_at=CURRENT_TIMESTAMP, last_mention=CURRENT_TIMESTAMP WHERE id=?",
+                    (block["content"], int(block["is_permanent"]), json.dumps(embedding), existing[0])
+                )
+                updated += 1
         else:
             # 无变化，更新last_mention
             conn.execute(
