@@ -1704,8 +1704,9 @@ def cmd_mark(args):
     if not found:
         print(f"❌ 未找到匹配的知识块: {title_keyword}")
         return results
-    
-    if found["is_permanent"]:
+
+    # 幂等性：检查是否已标记（标题可能已含📌但标志未更新）
+    if found["is_permanent"] or found["title"].rstrip().endswith("📌"):
         print(f"✅ 已经是永久记忆: {found['title']}")
         results["success"] = True
         results["title"] = found["title"]
@@ -1713,7 +1714,7 @@ def cmd_mark(args):
     
     # 在标题中添加 📌 标记
     old_title = found["title"]
-    new_title = old_title + " 📌"
+    if "📌" not in old_title: new_title = old_title + " 📌" else: new_title = old_title
     
     # 替换内容
     new_content = content.replace(

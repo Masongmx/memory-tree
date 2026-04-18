@@ -5,20 +5,23 @@
 使用本地 qwen3-embedding 模型实现语义检索。
 """
 
+from __future__ import annotations
+
 import sqlite3
 import json
 import numpy as np
 import requests
 from pathlib import Path
 from contextlib import contextmanager
+from typing import Any
 
-WORKSPACE = Path.home() / ".openclaw" / "workspace"
-DB_PATH = WORKSPACE / "memory" / "memory_vectors.db"
-OLLAMA_URL = "http://localhost:11434/api/embeddings"
-DEFAULT_MODEL = "qwen3-embedding"
+WORKSPACE: Path = Path.home() / ".openclaw" / "workspace"
+DB_PATH: Path = WORKSPACE / "memory" / "memory_vectors.db"
+OLLAMA_URL: str = "http://localhost:11434/api/embeddings"
+DEFAULT_MODEL: str = "qwen3-embedding"
 
 
-def get_embedding(text, model=DEFAULT_MODEL, max_retries=3):
+def get_embedding(text: str, model: str = DEFAULT_MODEL, max_retries: int = 3) -> list[float] | None:
     """调用Ollama获取embedding向量，失败时返回None"""
     for attempt in range(1, max_retries + 1):
         try:
@@ -40,7 +43,7 @@ def get_embedding(text, model=DEFAULT_MODEL, max_retries=3):
 def init_db():
     """初始化SQLite数据库（含FTS5全文搜索索引）"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    conn: sqlite3.Connection = sqlite3.connect(str(DB_PATH))
     try:
         # 主表
         conn.execute("""
@@ -79,7 +82,7 @@ def init_db():
         conn.close()
 
 
-def rebuild_fts_index():
+def rebuild_fts_index() -> bool:
     """重建FTS5索引"""
     conn = init_db()
     try:
@@ -99,7 +102,7 @@ def rebuild_fts_index():
         conn.close()
 
 
-def keyword_search(query, top_k=10):
+def keyword_search(query: str, top_k: int = 10) -> list[dict[str, Any]]:
     """
     FTS5全文搜索
     
@@ -201,7 +204,7 @@ def keyword_search(query, top_k=10):
         conn.close()
 
 
-def temporal_search(top_k=10, decay_days=30):
+def temporal_search(top_k: int = 10, decay_days: int = 30) -> list[dict[str, Any]]:
     """
     时间加权检索（最近访问优先）
     
@@ -266,7 +269,7 @@ def temporal_search(top_k=10, decay_days=30):
     return results[:top_k]
 
 
-def migrate_db():
+def migrate_db() -> None:
     """迁移数据库 - 添加新字段"""
     conn = sqlite3.connect(str(DB_PATH))
     
@@ -304,7 +307,7 @@ def migrate_db():
     conn.close()
 
 
-def store_memory(title, content, is_permanent=False, block_type="normal"):
+def store_memory(title: str, content: str, is_permanent: bool = False, block_type: str = "normal") -> None:
     """存储一条记忆（含向量）"""
     conn = init_db()
     embedding = get_embedding(f"{title}\n{content}")
@@ -321,7 +324,7 @@ def store_memory(title, content, is_permanent=False, block_type="normal"):
     conn.close()
 
 
-def search_memories(query, top_k=5):
+def search_memories(query: str, top_k: int = 5) -> list[dict[str, Any]]:
     """向量检索 — 返回最相关的记忆"""
     conn = init_db()
     query_embedding = get_embedding(query)
@@ -349,7 +352,7 @@ def search_memories(query, top_k=5):
     return results[:top_k]
 
 
-def sync_from_markdown():
+def sync_from_markdown() -> int:
     """从MEMORY.md同步到SQLite"""
     memory_file = WORKSPACE / "MEMORY.md"
     if not memory_file.exists():
@@ -400,7 +403,7 @@ def sync_from_markdown():
     return len(blocks)
 
 
-def get_stats():
+def get_stats() -> dict[str, Any]:
     """获取向量存储统计"""
     conn = init_db()
     
@@ -422,7 +425,7 @@ def get_stats():
     }
 
 
-def memory_exists_similar(title, content, threshold=0.9):
+def memory_exists_similar(title: str, content: str, threshold: float = 0.9) -> bool:
     """检查是否存在相似记忆（避免重复）"""
     conn = init_db()
     
@@ -459,21 +462,28 @@ def memory_exists_similar(title, content, threshold=0.9):
     return False
 
 
-def store_extracted_memories(memories):
+def store_extracted_memories(memories: list[dict[str, Any]]) -> dict[str, int]:
     """将提取的记忆存入向量数据库"""
     conn = sqlite3.connect(str(DB_PATH), timeout=30)
     stored = 0
     skipped = 0
-    
+
+    # 预取所有已有embedding（避免N+1）
+    rows = conn.execute("SELECT id, embedding FROM memories").fetchall()
+    existing_embs: list[tuple[int, np.ndarray]] = []
+    if rows:
+        for row_id, emb_blob in rows:
+            existing_embs.append((row_id, np.array(json.loads(emb_blob))))
+
     for mem in memories:
         title = mem.get("title", "")
         content = mem.get("content", "")
         is_permanent = mem.get("is_permanent", False)
         category = mem.get("category", "其他")
-        
+
         if not title or not content:
             continue
-        
+
         # 检查标题是否已存在
         existing = conn.execute(
             "SELECT id FROM memories WHERE title = ?",
@@ -482,28 +492,27 @@ def store_extracted_memories(memories):
         if existing:
             skipped += 1
             continue
-        
-        # 检查向量相似度
+
+        # 检查向量相似度（batch计算）
         try:
             new_emb = np.array(get_embedding(f"{title}\n{content}"))
         except Exception as e:
             print(f"⚠️ Embedding失败 [{title}]: {e}")
             continue
-        
-        rows = conn.execute("SELECT embedding FROM memories").fetchall()
+
         is_duplicate = False
-        
-        for row in rows:
-            existing_emb = np.array(json.loads(row[0]))
-            sim = np.dot(new_emb, existing_emb) / (np.linalg.norm(new_emb) * np.linalg.norm(existing_emb))
-            if sim > 0.9:
+        if existing_embs:
+            existing_vecs = np.array([e[1] for e in existing_embs])
+            sims = np.dot(existing_vecs, new_emb) / (
+                np.linalg.norm(existing_vecs, axis=1) * np.linalg.norm(new_emb)
+            )
+            if np.any(sims > 0.9):
                 is_duplicate = True
-                break
-        
+
         if is_duplicate:
             skipped += 1
             continue
-        
+
         # 存储
         try:
             embedding_blob = json.dumps(new_emb.tolist())
@@ -514,13 +523,13 @@ def store_extracted_memories(memories):
             stored += 1
         except Exception as e:
             print(f"⚠️ 存储失败 [{title}]: {e}")
-    
+
     conn.commit()
     conn.close()
     return {"stored": stored, "skipped": skipped}
 
 
-def sync_incremental():
+def sync_incremental() -> dict[str, int]:
     """增量同步MEMORY.md到SQLite"""
     memory_file = WORKSPACE / "MEMORY.md"
     if not memory_file.exists():
